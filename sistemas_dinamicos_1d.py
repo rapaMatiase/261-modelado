@@ -28,6 +28,7 @@ C = {
     "accent":   "#7c3aed",
     "accent_h": "#6d28d9",
     "accent2":  "#06b6d4",
+    "accent3":  "#0e7490",
     "stable":   "#22c55e",
     "unstable": "#ef4444",
     "semi":     "#f59e0b",
@@ -757,6 +758,311 @@ class BifurcationWindow(tk.Toplevel):
         self._rlbl.configure(text="\n".join(parts))
 
 # =====================================================================
+#  ANALISIS 2D LINEAL -- funciones auxiliares
+# =====================================================================
+
+def _fmt_complex(z):
+    z = complex(z)
+    if abs(z.imag) < 1e-9:
+        return "{:.5f}".format(z.real)
+    return "{:.4f}{:+.4f}i".format(z.real, z.imag)
+
+
+def _classify_2d(vals, A):
+    lam1, lam2 = complex(vals[0]), complex(vals[1])
+    scale = max(abs(lam1), abs(lam2), 1.0)
+    tol   = 1e-8 * scale
+    if abs(lam1.imag) > tol:               # Valores complejos conjugados
+        alpha = lam1.real
+        if   alpha < -tol: return "Espiral Estable",    "Asintoticamente Estable"
+        elif alpha >  tol: return "Espiral Inestable",  "Inestable"
+        else:              return "Centro",              "Estable"
+    r1, r2 = lam1.real, lam2.real
+    teq = 1e-7 * max(abs(r1), abs(r2), 1.0)
+    if abs(r1 - r2) < teq:                 # Valores reales repetidos
+        lam  = (r1 + r2) / 2.0
+        rank = np.linalg.matrix_rank(A - lam * np.eye(2), tol=1e-8)
+        tipo = "Nodo Estrella" if rank == 0 else "Nodo Degenerado"
+        if   lam < -teq: estab = "Asintoticamente Estable"
+        elif lam >  teq: estab = "Inestable"
+        else:            estab = "Estable"
+        return tipo, estab
+    if r1 * r2 < 0:              return "Punto de Silla", "Inestable"
+    if r1 < -tol and r2 < -tol:  return "Nodo Estable",   "Asintoticamente Estable"
+    if r1 >  tol and r2 >  tol:  return "Nodo Inestable",  "Inestable"
+    return "No Hiperbolico", "Indeterminado"
+
+
+def _plot_phase_2d(ax, A, xmin, xmax, ymin, ymax, tmax, tipo):
+    ax.set_facecolor(C["plot_bg"])
+    nx, ny = 22, 22
+    xs = np.linspace(xmin, xmax, nx)
+    ys = np.linspace(ymin, ymax, ny)
+    XX, YY = np.meshgrid(xs, ys)
+    pts  = np.stack([XX.ravel(), YY.ravel()])
+    dpts = A @ pts
+    UU   = dpts[0].reshape(ny, nx)
+    VV   = dpts[1].reshape(ny, nx)
+    speed = np.sqrt(UU**2 + VV**2) + 1e-12
+    ax.streamplot(xs, ys, UU, VV,
+                  color=speed / speed.max(),
+                  cmap="plasma", linewidth=0.9,
+                  arrowsize=1.0, density=1.2,
+                  broken_streamlines=False)
+    r0     = min(abs(xmax - xmin), abs(ymax - ymin)) * 0.35
+    t_ev   = np.linspace(0, tmax, 800)
+    angles = np.linspace(0, 2 * np.pi, 9)[:-1]
+    cols   = plt.cm.cool(np.linspace(0.1, 0.9, 8))
+    for th, col in zip(angles, cols):
+        x0, y0 = r0 * np.cos(th), r0 * np.sin(th)
+        try:
+            sol = solve_ivp(lambda t, y: A @ y, (0, tmax), [x0, y0],
+                            t_eval=t_ev, method="RK45", rtol=1e-7, atol=1e-9)
+            if sol.success:
+                xc = np.clip(sol.y[0], xmin * 3, xmax * 3)
+                yc = np.clip(sol.y[1], ymin * 3, ymax * 3)
+                ax.plot(xc, yc, color=col, linewidth=1.4, alpha=0.85)
+        except Exception:
+            pass
+    ax.plot(0, 0, "*", color="white", markersize=12, zorder=8, markeredgecolor="black")
+    _style(ax, "Plano de Fase -- " + tipo, "x", "y")
+    ax.set_xlim(xmin, xmax)
+    ax.set_ylim(ymin, ymax)
+
+
+def _plot_time_2d(ax, A, tmax, xmin, xmax, ymin, ymax):
+    ax.set_facecolor(C["plot_bg"])
+    r0     = min(abs(xmax - xmin), abs(ymax - ymin)) * 0.35
+    t_ev   = np.linspace(0, tmax, 800)
+    angles = np.linspace(0, 2 * np.pi, 9)[:-1]
+    cols   = plt.cm.cool(np.linspace(0.1, 0.9, 8))
+    for th, col in zip(angles, cols):
+        x0, y0 = r0 * np.cos(th), r0 * np.sin(th)
+        try:
+            sol = solve_ivp(lambda t, y: A @ y, (0, tmax), [x0, y0],
+                            t_eval=t_ev, method="RK45", rtol=1e-7, atol=1e-9)
+            if sol.success:
+                xc = np.clip(sol.y[0], xmin * 5, xmax * 5)
+                yc = np.clip(sol.y[1], ymin * 5, ymax * 5)
+                ax.plot(sol.t, xc, color=col, linewidth=1.4, alpha=0.82, linestyle="-")
+                ax.plot(sol.t, yc, color=col, linewidth=1.1, alpha=0.55, linestyle="--")
+        except Exception:
+            pass
+    leg = [Line2D([0], [0], color="white", lw=1.5, ls="-",  label="x(t)"),
+           Line2D([0], [0], color="white", lw=1.1, ls="--", label="y(t)")]
+    ax.legend(handles=leg, fontsize=7.5, facecolor=C["panel"], labelcolor=C["text"],
+              framealpha=0.85, loc="upper right")
+    _style(ax, "Evolucion Temporal", "t", "x(t), y(t)")
+
+
+def _analizar_2d(a, b, c, d, tmax, xmin, xmax, ymin, ymax, fig):
+    A     = np.array([[a, b], [c, d]], dtype=float)
+    tau   = a + d
+    delta = a * d - b * c
+    vals, vecs = np.linalg.eig(A)
+    tipo, estab = _classify_2d(vals, A)
+    fig.clear()
+    fig.patch.set_facecolor(C["bg"])
+    ax_p = fig.add_subplot(1, 2, 1)
+    ax_t = fig.add_subplot(1, 2, 2)
+    _plot_phase_2d(ax_p, A, xmin, xmax, ymin, ymax, tmax, tipo)
+    _plot_time_2d(ax_t, A, tmax, xmin, xmax, ymin, ymax)
+    fig.subplots_adjust(left=0.08, right=0.97, top=0.93, bottom=0.09, wspace=0.32)
+    return A, tau, delta, vals, vecs, tipo, estab
+
+
+# =====================================================================
+#  VENTANA: SISTEMAS LINEALES 2D
+# =====================================================================
+
+class SistemaLineal2DWindow(tk.Toplevel):
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("Sistemas Lineales 2D")
+        self.configure(bg=C["bg"])
+        self.geometry("1360x880")
+        self.minsize(1050, 700)
+        self._build()
+
+    def _build(self):
+        _s = ttk.Style(self)
+        _s.configure("Lin2D.Horizontal.TProgressbar",
+                      troughcolor=C["entry_bg"], background=C["accent3"],
+                      bordercolor=C["border"], thickness=10)
+
+        # Header
+        hdr = tk.Frame(self, bg=C["accent3"], height=48)
+        hdr.pack(fill="x"); hdr.pack_propagate(False)
+        tk.Label(hdr, text="  Sistemas Lineales 2D",
+                 bg=C["accent3"], fg="white",
+                 font=("Segoe UI", 12, "bold")).pack(side="left", padx=14, pady=10)
+        tk.Label(hdr, text="dx/dt = ax + by   |   dy/dt = cx + dy  ",
+                 bg=C["accent3"], fg="#bae6fd",
+                 font=("Segoe UI", 10, "italic")).pack(side="right", padx=14)
+
+        # Panel de entrada
+        inp = tk.Frame(self, bg=C["panel"])
+        inp.pack(fill="x", padx=10, pady=(10, 4))
+
+        # Matriz 2x2
+        mat_frame = tk.Frame(inp, bg=C["panel"])
+        mat_frame.pack(side="left", padx=(14, 24), pady=(10, 10))
+        tk.Label(mat_frame, text="Matriz A", bg=C["panel"], fg=C["accent3"],
+                 font=("Segoe UI", 9, "bold")).grid(row=0, column=0, columnspan=6, pady=(0, 4))
+
+        def mat_entry(r, c, var, lbl):
+            tk.Label(mat_frame, text=lbl, bg=C["panel"], fg=C["text2"],
+                     font=("Segoe UI", 9)).grid(row=r + 1, column=c * 2,
+                                                padx=(6, 2), sticky="e")
+            en = tk.Entry(mat_frame, textvariable=var, width=7,
+                          bg=C["entry_bg"], fg=C["accent2"],
+                          insertbackground=C["text"], font=("Consolas", 11),
+                          relief="flat", bd=4)
+            en.grid(row=r + 1, column=c * 2 + 1, padx=(0, 10), ipady=3)
+            en.bind("<Return>", lambda ev: self._run())
+
+        self._a = tk.StringVar(value="1")
+        self._b = tk.StringVar(value="-2")
+        self._c = tk.StringVar(value="1")
+        self._d = tk.StringVar(value="-1")
+        mat_entry(0, 0, self._a, "a =")
+        mat_entry(0, 1, self._b, "b =")
+        mat_entry(1, 0, self._c, "c =")
+        mat_entry(1, 1, self._d, "d =")
+
+        # Campos de rango
+        rng_frame = tk.Frame(inp, bg=C["panel"])
+        rng_frame.pack(side="left", padx=(0, 14), pady=(10, 10))
+
+        def field(p, lbl, var, w=7):
+            frm = tk.Frame(p, bg=C["panel"])
+            frm.pack(anchor="w", pady=2)
+            tk.Label(frm, text=lbl, bg=C["panel"], fg=C["text2"],
+                     font=("Segoe UI", 9), width=10, anchor="e").pack(side="left", padx=(0, 4))
+            en = tk.Entry(frm, textvariable=var, width=w,
+                          bg=C["entry_bg"], fg=C["accent2"],
+                          insertbackground=C["text"], font=("Consolas", 9),
+                          relief="flat", bd=4)
+            en.pack(side="left")
+            en.bind("<Return>", lambda ev: self._run())
+
+        self._tmax = tk.StringVar(value="10")
+        self._xmin = tk.StringVar(value="-4")
+        self._xmax = tk.StringVar(value="4")
+        self._ymin = tk.StringVar(value="-4")
+        self._ymax = tk.StringVar(value="4")
+        field(rng_frame, "t maximo:", self._tmax)
+        field(rng_frame, "x minimo:", self._xmin)
+        field(rng_frame, "x maximo:", self._xmax)
+        field(rng_frame, "y minimo:", self._ymin)
+        field(rng_frame, "y maximo:", self._ymax)
+
+        # Boton + progressbar
+        btn_frame = tk.Frame(inp, bg=C["panel"])
+        btn_frame.pack(side="left", padx=(10, 14), pady=10)
+        self._btn = tk.Button(btn_frame, text="  ANALIZAR  ",
+                               bg=C["accent3"], fg="white",
+                               font=("Segoe UI", 11, "bold"), relief="flat",
+                               cursor="hand2", pady=8,
+                               activebackground="#0891b2", activeforeground="white",
+                               command=self._run)
+        self._btn.pack(pady=(0, 8))
+        self._pb = ttk.Progressbar(btn_frame, mode="indeterminate", length=120,
+                                    style="Lin2D.Horizontal.TProgressbar")
+
+        tk.Frame(self, bg=C["border"], height=1).pack(fill="x", padx=10)
+
+        # Panel principal: sidebar resultados + canvas
+        main = tk.Frame(self, bg=C["bg"])
+        main.pack(fill="both", expand=True, padx=10, pady=(4, 8))
+
+        # Sidebar de resultados (izquierda)
+        sb = tk.Frame(main, bg=C["panel"], width=310)
+        sb.pack(side="left", fill="y", padx=(0, 6))
+        sb.pack_propagate(False)
+        tk.Label(sb, text="  RESULTADOS", bg=C["sidebar"], fg="white",
+                 font=("Segoe UI", 9, "bold")).pack(fill="x", ipady=5)
+        self._rtxt = tk.Text(sb, bg=C["entry_bg"], fg=C["text"],
+                              font=("Consolas", 9), relief="flat",
+                              wrap="word", state="disabled",
+                              selectbackground=C["accent"], padx=8, pady=8)
+        self._rtxt.pack(fill="both", expand=True)
+
+        # Canvas matplotlib (derecha)
+        pf = tk.Frame(main, bg=C["bg"])
+        pf.pack(side="left", fill="both", expand=True)
+        self._fig    = plt.Figure(facecolor=C["bg"])
+        self._canvas = FigureCanvasTkAgg(self._fig, master=pf)
+        self._canvas.get_tk_widget().pack(fill="both", expand=True)
+        tbf = tk.Frame(pf, bg=C["panel"]); tbf.pack(fill="x")
+        tb = NavigationToolbar2Tk(self._canvas, tbf)
+        tb.config(bg=C["panel"]); tb.update()
+        self._run()
+
+    def _run(self):
+        try:
+            a = float(self._a.get()); b = float(self._b.get())
+            c = float(self._c.get()); d = float(self._d.get())
+            tmax = float(self._tmax.get())
+            xmin = float(self._xmin.get()); xmax = float(self._xmax.get())
+            ymin = float(self._ymin.get()); ymax = float(self._ymax.get())
+        except ValueError:
+            messagebox.showerror("Error", "Todos los valores deben ser numeros.", parent=self)
+            return
+        self._btn.config(state="disabled", text="  Analizando...")
+        self._pb.pack(pady=(0, 4)); self._pb.start(10)
+
+        def _work():
+            try:
+                result = _analizar_2d(a, b, c, d, tmax, xmin, xmax, ymin, ymax, self._fig)
+                self.after(0, lambda: self._finish(result, None))
+            except Exception as exc:
+                self.after(0, lambda: self._finish(None, exc))
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _finish(self, result, error):
+        self._pb.stop(); self._pb.pack_forget()
+        self._btn.config(state="normal", text="  ANALIZAR  ")
+        if error is not None:
+            messagebox.showerror("Error", "Error al analizar:\n\n{}".format(error), parent=self)
+            return
+        self._canvas.draw()
+        A, tau, delta, vals, vecs, tipo, estab = result
+        lines = []
+        lines.append("CLASIFICACION")
+        lines.append("=" * 32)
+        lines.append("  Tipo:        {}".format(tipo))
+        lines.append("  Estabilidad: {}".format(estab))
+        lines.append("")
+        lines.append("TRAZAS Y DETERMINANTE")
+        lines.append("-" * 32)
+        lines.append("  Traza  (τ)  = {:+.6f}".format(tau))
+        lines.append("  Det    (Δ)  = {:+.6f}".format(delta))
+        lines.append("  τ² - 4Δ    = {:+.6f}".format(tau**2 - 4 * delta))
+        lines.append("")
+        lines.append("VALORES PROPIOS")
+        lines.append("-" * 32)
+        for i, v in enumerate(vals):
+            lines.append("  λ{} = {}".format(i + 1, _fmt_complex(v)))
+        lines.append("")
+        lines.append("VECTORES PROPIOS")
+        lines.append("-" * 32)
+        for i, col in enumerate(vecs.T):
+            lines.append("  v{}: [ {}".format(i + 1, _fmt_complex(col[0])))
+            lines.append("       {} ]".format(_fmt_complex(col[1])))
+        lines.append("")
+        lines.append("MATRIZ A")
+        lines.append("-" * 32)
+        lines.append("  [ {:+.4f}  {:+.4f} ]".format(A[0, 0], A[0, 1]))
+        lines.append("  [ {:+.4f}  {:+.4f} ]".format(A[1, 0], A[1, 1]))
+        txt = "\n".join(lines)
+        self._rtxt.config(state="normal")
+        self._rtxt.delete("1.0", "end")
+        self._rtxt.insert("end", txt)
+        self._rtxt.config(state="disabled")
+
+
+# =====================================================================
 #  MENU PRINCIPAL
 # =====================================================================
 
@@ -815,6 +1121,23 @@ class MainMenu(tk.Tk):
         tk.Label(body, text="x_dot = f(x, r)   --   diagrama de bifurcacion, fase y temporal",
                  bg=C["bg"], fg=C["text2"], font=("Segoe UI", 8, "italic")).pack()
 
+        tk.Frame(body, bg=C["bg"], height=18).pack()
+
+        # Boton 3: Sistemas Lineales 2D
+        tk.Button(body,
+            text="   Sistemas Lineales 2D",
+            bg=C["panel"], fg=C["text"],
+            font=("Segoe UI", 12, "bold"),
+            relief="flat", cursor="hand2",
+            padx=40, pady=22, width=36,
+            activebackground=C["accent3"], activeforeground="white",
+            command=self._open_2d,
+        ).pack(fill="x")
+        tk.Frame(body, bg=C["accent3"], height=3).pack(fill="x", pady=(0, 4))
+        tk.Label(body,
+                 text="dx/dt = ax+by, dy/dt = cx+dy   --   eigenvalores, clasificacion y diagramas",
+                 bg=C["bg"], fg=C["text2"], font=("Segoe UI", 8, "italic")).pack()
+
         tk.Frame(body, bg=C["bg"], height=20).pack()
         tk.Label(body, text="*  *  *     Mas tipos de sistemas proximamente     *  *  *",
                  bg=C["bg"], fg="#2d3a55", font=("Segoe UI", 8)).pack(pady=6)
@@ -827,6 +1150,9 @@ class MainMenu(tk.Tk):
 
     def _open_bif(self):
         win = BifurcationWindow(self); win.grab_set(); win.focus_force()
+
+    def _open_2d(self):
+        win = SistemaLineal2DWindow(self); win.grab_set(); win.focus_force()
 
 # =====================================================================
 if __name__ == "__main__":
