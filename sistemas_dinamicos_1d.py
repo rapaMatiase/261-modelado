@@ -824,10 +824,34 @@ def _plot_phase_2d(ax, A, xmin, xmax, ymin, ymax, tmax, tipo):
                 ax.plot(xc, yc, color=col, linewidth=1.4, alpha=0.85)
         except Exception:
             pass
+    # ── Nulclines ────────────────────────────────────────────────────
+    xn      = np.linspace(xmin, xmax, 600)
+    a_m, b_m = A[0, 0], A[0, 1]
+    c_m, d_m = A[1, 0], A[1, 1]
+    if abs(b_m) > 1e-10:
+        yn_x = -(a_m / b_m) * xn
+        mk = (yn_x >= ymin) & (yn_x <= ymax)
+        if np.any(mk):
+            ax.plot(xn[mk], yn_x[mk], color=C["accent2"], lw=2.0, ls="--",
+                    alpha=0.92, label="Nulclina  dx/dt=0", zorder=6)
+    elif abs(a_m) > 1e-10:
+        ax.axvline(0, color=C["accent2"], lw=2.0, ls="--", alpha=0.92,
+                   label="Nulclina  dx/dt=0", zorder=6)
+    if abs(d_m) > 1e-10:
+        yn_y = -(c_m / d_m) * xn
+        mk = (yn_y >= ymin) & (yn_y <= ymax)
+        if np.any(mk):
+            ax.plot(xn[mk], yn_y[mk], color=C["semi"], lw=2.0, ls="--",
+                    alpha=0.92, label="Nulclina  dy/dt=0", zorder=6)
+    elif abs(c_m) > 1e-10:
+        ax.axvline(0, color=C["semi"], lw=2.0, ls="--", alpha=0.92,
+                   label="Nulclina  dy/dt=0", zorder=6)
     ax.plot(0, 0, "*", color="white", markersize=12, zorder=8, markeredgecolor="black")
     _style(ax, "Plano de Fase -- " + tipo, "x", "y")
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(ymin, ymax)
+    ax.legend(fontsize=7.5, facecolor=C["panel"], labelcolor=C["text"],
+              framealpha=0.85, loc="upper right")
 
 
 def _plot_time_2d(ax, A, tmax, xmin, xmax, ymin, ymax):
@@ -855,6 +879,71 @@ def _plot_time_2d(ax, A, tmax, xmin, xmax, ymin, ymax):
     _style(ax, "Evolucion Temporal", "t", "x(t), y(t)")
 
 
+def _plot_tauDelta_2d(ax, tau, delta, tipo):
+    ax.set_facecolor(C["plot_bg"])
+
+    # Rango adaptativo centrado en el punto actual
+    margin_t = max(abs(tau) * 2.8, 3.5)
+    margin_d = max(abs(delta) * 2.8, 3.5)
+    t_lo, t_hi = -margin_t, margin_t
+    d_lo = max(-margin_d * 0.55, -abs(delta) * 3 - 2)
+    d_hi = max(margin_d, abs(delta) * 1.4 + 2)
+
+    ts = np.linspace(t_lo, t_hi, 600)
+
+    # ── Regiones de color ────────────────────────────────────────────
+    # Silla: Δ < 0
+    ax.fill_between(ts, d_lo, np.zeros_like(ts),
+                    alpha=0.13, color=C["semi"], zorder=1)
+    # Estable: τ < 0, Δ > 0
+    ts_neg = ts[ts <= 0]
+    ax.fill_between(ts_neg, np.zeros(len(ts_neg)), d_hi,
+                    alpha=0.10, color=C["stable"], zorder=1)
+    # Inestable: τ > 0, Δ > 0
+    ts_pos = ts[ts >= 0]
+    ax.fill_between(ts_pos, np.zeros(len(ts_pos)), d_hi,
+                    alpha=0.10, color=C["unstable"], zorder=1)
+
+    # ── Parabola τ² = 4Δ  (separa nodos de espirales) ───────────────
+    parab = ts**2 / 4.0
+    mk = (parab >= 0) & (parab <= d_hi)
+    ax.plot(ts[mk], parab[mk], color=C["text2"], lw=1.3, ls="--",
+            alpha=0.65, zorder=3, label="$\\tau^2 = 4\\Delta$  (nodos ↔ espirales)")
+
+    # ── Ejes ─────────────────────────────────────────────────────────
+    ax.axhline(0, color=C["text2"], lw=0.8, alpha=0.45, zorder=2)
+    ax.axvline(0, color=C["text2"], lw=0.8, alpha=0.45, zorder=2)
+
+    # ── Etiquetas de regiones ────────────────────────────────────────
+    pad_x = margin_t * 0.35
+    pad_d = (d_hi - d_lo) * 0.12
+    ax.text(-pad_x, d_hi - pad_d, "Estable\n(nodo / espiral)",
+            color=C["stable"],   fontsize=7.5, ha="center", va="top", style="italic")
+    ax.text( pad_x, d_hi - pad_d, "Inestable\n(nodo / espiral)",
+            color=C["unstable"], fontsize=7.5, ha="center", va="top", style="italic")
+    ax.text(0, (d_lo + 0) / 2, "Punto de Silla",
+            color=C["semi"], fontsize=7.5, ha="center", va="center", style="italic")
+
+    # ── Punto del sistema actual ─────────────────────────────────────
+    pt_col = C["accent3"]
+    ax.plot(tau, delta, "o", color=pt_col, markersize=10, zorder=9,
+            markeredgecolor="white", markeredgewidth=1.5)
+    offset_x = margin_t * 0.08
+    offset_d = (d_hi - d_lo) * 0.07
+    ax.annotate(
+        "  ({:.3f}, {:.3f})   {}".format(tau, delta, tipo),
+        xy=(tau, delta),
+        xytext=(tau + offset_x, delta + offset_d),
+        color="white", fontsize=8, zorder=10,
+        arrowprops=dict(arrowstyle="->", color="white", lw=0.9))
+
+    ax.set_xlim(t_lo, t_hi)
+    ax.set_ylim(d_lo, d_hi)
+    _style(ax, "Plano Traza-Determinante", "Traza  τ = a + d", "Determinante  Δ = ad − bc")
+    ax.legend(fontsize=7.5, facecolor=C["panel"], labelcolor=C["text"],
+              framealpha=0.85, loc="upper right")
+
+
 def _analizar_2d(a, b, c, d, tmax, xmin, xmax, ymin, ymax, fig):
     A     = np.array([[a, b], [c, d]], dtype=float)
     tau   = a + d
@@ -863,11 +952,16 @@ def _analizar_2d(a, b, c, d, tmax, xmin, xmax, ymin, ymax, fig):
     tipo, estab = _classify_2d(vals, A)
     fig.clear()
     fig.patch.set_facecolor(C["bg"])
-    ax_p = fig.add_subplot(1, 2, 1)
-    ax_t = fig.add_subplot(1, 2, 2)
+    gs = fig.add_gridspec(2, 2,
+                          height_ratios=[1.75, 1],
+                          hspace=0.46, wspace=0.30,
+                          left=0.07, right=0.97, top=0.95, bottom=0.08)
+    ax_p = fig.add_subplot(gs[0, 0])   # Plano de fase
+    ax_t = fig.add_subplot(gs[0, 1])   # Evolucion temporal
+    ax_d = fig.add_subplot(gs[1, :])   # Plano τ-Δ (ancho completo)
     _plot_phase_2d(ax_p, A, xmin, xmax, ymin, ymax, tmax, tipo)
     _plot_time_2d(ax_t, A, tmax, xmin, xmax, ymin, ymax)
-    fig.subplots_adjust(left=0.08, right=0.97, top=0.93, bottom=0.09, wspace=0.32)
+    _plot_tauDelta_2d(ax_d, tau, delta, tipo)
     return A, tau, delta, vals, vecs, tipo, estab
 
 
