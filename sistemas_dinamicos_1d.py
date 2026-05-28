@@ -29,6 +29,7 @@ C = {
     "accent_h": "#6d28d9",
     "accent2":  "#06b6d4",
     "accent3":  "#0e7490",
+    "accent4":  "#ea580c",
     "stable":   "#22c55e",
     "unstable": "#ef4444",
     "semi":     "#f59e0b",
@@ -1157,6 +1158,401 @@ class SistemaLineal2DWindow(tk.Toplevel):
 
 
 # =====================================================================
+#  SISTEMAS NO HOMOGENEOS 2D -- funciones auxiliares
+# =====================================================================
+
+def _make_f_vec(f1_expr, f2_expr):
+    """Retorna f: t -> np.array([f1(t), f2(t)])"""
+    def fv(t_val):
+        local = dict(_ns_base()); local["t"] = float(t_val)
+        return np.array([float(eval(f1_expr, local)),
+                         float(eval(f2_expr, local))], dtype=float)
+    return fv
+
+
+def _detect_forcing(f_vec):
+    """Devuelve (tipo_str, valor_constante_o_None)."""
+    t_test   = np.array([0.0, 0.5, 1.0, 2.0, 5.0, 10.0])
+    samples  = np.array([f_vec(t) for t in t_test])
+    if np.allclose(samples, samples[0], rtol=1e-6, atol=1e-8):
+        return "Constante", samples[0]
+    return "Variable en t", None
+
+
+def _plot_phase_nonhom(ax, A, f_vec, xmin, xmax, ymin, ymax, tmax, tipo, xp):
+    ax.set_facecolor(C["plot_bg"])
+    r0     = min(abs(xmax - xmin), abs(ymax - ymin)) * 0.35
+    t_ev   = np.linspace(0, tmax, 1000)
+    angles = np.linspace(0, 2 * np.pi, 9)[:-1]
+    cols   = plt.cm.cool(np.linspace(0.1, 0.9, 8))
+
+    # ── Trayectorias homogeneas (fondo, tenues) ──────────────────────
+    for th, col in zip(angles, cols):
+        x0c, y0c = r0 * np.cos(th), r0 * np.sin(th)
+        try:
+            sol = solve_ivp(lambda t, y: A @ y, (0, tmax), [x0c, y0c],
+                            t_eval=t_ev, method="RK45", rtol=1e-8, atol=1e-10)
+            if sol.success:
+                ax.plot(np.clip(sol.y[0], xmin * 4, xmax * 4),
+                        np.clip(sol.y[1], ymin * 4, ymax * 4),
+                        color=col, lw=0.9, alpha=0.22, ls="--")
+        except Exception:
+            pass
+
+    # ── Trayectorias no homogeneas (encima, brillantes) ──────────────
+    for th, col in zip(angles, cols):
+        x0c, y0c = r0 * np.cos(th), r0 * np.sin(th)
+        try:
+            sol = solve_ivp(lambda t, y: A @ y + f_vec(t), (0, tmax), [x0c, y0c],
+                            t_eval=t_ev, method="RK45", rtol=1e-7, atol=1e-9)
+            if sol.success:
+                ax.plot(np.clip(sol.y[0], xmin * 4, xmax * 4),
+                        np.clip(sol.y[1], ymin * 4, ymax * 4),
+                        color=col, lw=1.6, alpha=0.90)
+        except Exception:
+            pass
+
+    # ── Marcadores de equilibrios ─────────────────────────────────────
+    ax.plot(0, 0, "o", color="white", markersize=9, zorder=8,
+            markeredgecolor=C["text2"], markeredgewidth=1.5, label="Origen (hom.)")
+    if xp is not None:
+        ax.plot(xp[0], xp[1], "*", color=C["accent4"], markersize=14, zorder=9,
+                markeredgecolor="white", markeredgewidth=1.2,
+                label="Eq. desplazado ({:.2f}, {:.2f})".format(xp[0], xp[1]))
+
+    ax.set_xlim(xmin, xmax); ax.set_ylim(ymin, ymax)
+    _style(ax, "Plano de Fase  (-- hom.)  (— no hom.)", "x", "y")
+    ax.legend(fontsize=7, facecolor=C["panel"], labelcolor=C["text"],
+              framealpha=0.85, loc="upper right")
+
+
+def _plot_time_nonhom(ax, A, f_vec, tmax, xmin, xmax, ymin, ymax, x0_ic, y0_ic):
+    ax.set_facecolor(C["plot_bg"])
+    t_ev = np.linspace(0, tmax, 800)
+
+    # Solucion homogenea (referencia, tenue)
+    try:
+        sol_h = solve_ivp(lambda t, y: A @ y, (0, tmax), [x0_ic, y0_ic],
+                          t_eval=t_ev, method="RK45", rtol=1e-8, atol=1e-10)
+        if sol_h.success:
+            xh = np.clip(sol_h.y[0], xmin * 6, xmax * 6)
+            yh = np.clip(sol_h.y[1], ymin * 6, ymax * 6)
+            ax.plot(sol_h.t, xh, color=C["stable"],   lw=1.2, alpha=0.45,
+                    ls="--", label="x_h(t)")
+            ax.plot(sol_h.t, yh, color=C["unstable"], lw=1.2, alpha=0.45,
+                    ls="--", label="y_h(t)")
+    except Exception:
+        pass
+
+    # Solucion no homogenea
+    try:
+        sol_n = solve_ivp(lambda t, y: A @ y + f_vec(t), (0, tmax), [x0_ic, y0_ic],
+                          t_eval=t_ev, method="RK45", rtol=1e-7, atol=1e-9)
+        if sol_n.success:
+            xn = np.clip(sol_n.y[0], xmin * 6, xmax * 6)
+            yn = np.clip(sol_n.y[1], ymin * 6, ymax * 6)
+            ax.plot(sol_n.t, xn, color=C["accent4"], lw=2.0, alpha=0.95,
+                    label="x(t)  no hom.")
+            ax.plot(sol_n.t, yn, color=C["accent2"], lw=2.0, alpha=0.85,
+                    label="y(t)  no hom.")
+    except Exception:
+        pass
+
+    _style(ax, "Temporal  (-- hom.)  (— no hom.)", "t", "x(t),  y(t)")
+    ax.legend(fontsize=7, facecolor=C["panel"], labelcolor=C["text"],
+              framealpha=0.85, loc="upper right", ncol=2)
+
+
+def _analizar_nonhom(a, b, c, d, f1_expr, f2_expr,
+                     tmax, x0_ic, y0_ic, xmin, xmax, ymin, ymax, fig):
+    A     = np.array([[a, b], [c, d]], dtype=float)
+    tau   = a + d
+    delta = a * d - b * c
+    vals, vecs = np.linalg.eig(A)
+    tipo, estab = _classify_2d(vals, A)
+
+    f_vec            = _make_f_vec(f1_expr, f2_expr)
+    f_tipo, f_const  = _detect_forcing(f_vec)
+
+    # Solucion particular: A·xp = -f  (solo si f constante y A invertible)
+    xp = None
+    if f_tipo == "Constante" and abs(delta) > 1e-10:
+        try:
+            xp = -np.linalg.solve(A, f_const)
+        except Exception:
+            pass
+
+    fig.clear()
+    fig.patch.set_facecolor(C["bg"])
+    gs = fig.add_gridspec(2, 2,
+                          height_ratios=[1.75, 1],
+                          hspace=0.46, wspace=0.30,
+                          left=0.07, right=0.97, top=0.95, bottom=0.08)
+    ax_p = fig.add_subplot(gs[0, 0])
+    ax_t = fig.add_subplot(gs[0, 1])
+    ax_d = fig.add_subplot(gs[1, :])
+
+    _plot_phase_nonhom(ax_p, A, f_vec, xmin, xmax, ymin, ymax, tmax, tipo, xp)
+    _plot_time_nonhom(ax_t, A, f_vec, tmax, xmin, xmax, ymin, ymax, x0_ic, y0_ic)
+    _plot_tauDelta_2d(ax_d, tau, delta, tipo)
+
+    return A, tau, delta, vals, vecs, tipo, estab, xp, f_tipo, f_const
+
+
+# =====================================================================
+#  VENTANA: SISTEMAS LINEALES NO HOMOGENEOS 2D
+# =====================================================================
+
+class SistemaNoHomogeneo2DWindow(tk.Toplevel):
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("Sistemas Lineales No Homogeneos 2D")
+        self.configure(bg=C["bg"])
+        self.geometry("1400x900")
+        self.minsize(1100, 720)
+        self._build()
+
+    def _build(self):
+        _s = ttk.Style(self)
+        _s.configure("NH.Horizontal.TProgressbar",
+                      troughcolor=C["entry_bg"], background=C["accent4"],
+                      bordercolor=C["border"], thickness=10)
+
+        # Header
+        hdr = tk.Frame(self, bg=C["accent4"], height=48)
+        hdr.pack(fill="x"); hdr.pack_propagate(False)
+        tk.Label(hdr, text="  Sistemas Lineales No Homogeneos 2D",
+                 bg=C["accent4"], fg="white",
+                 font=("Segoe UI", 12, "bold")).pack(side="left", padx=14, pady=10)
+        tk.Label(hdr, text="X' = AX + f(t)  ",
+                 bg=C["accent4"], fg="#fed7aa",
+                 font=("Segoe UI", 10, "italic")).pack(side="right", padx=14)
+
+        inp = tk.Frame(self, bg=C["panel"])
+        inp.pack(fill="x", padx=10, pady=(10, 4))
+
+        # ── Grupo 1: Matriz A ─────────────────────────────────────────
+        mat_frame = tk.Frame(inp, bg=C["panel"])
+        mat_frame.pack(side="left", padx=(14, 4), pady=(10, 10))
+        tk.Label(mat_frame, text="Matriz A", bg=C["panel"], fg=C["accent4"],
+                 font=("Segoe UI", 9, "bold")).grid(row=0, column=0, columnspan=6, pady=(0, 4))
+
+        def mat_entry(r, c, var, lbl):
+            tk.Label(mat_frame, text=lbl, bg=C["panel"], fg=C["text2"],
+                     font=("Segoe UI", 9)).grid(row=r+1, column=c*2, padx=(6, 2), sticky="e")
+            en = tk.Entry(mat_frame, textvariable=var, width=7,
+                          bg=C["entry_bg"], fg=C["accent2"],
+                          insertbackground=C["text"], font=("Consolas", 11),
+                          relief="flat", bd=4)
+            en.grid(row=r+1, column=c*2+1, padx=(0, 8), ipady=3)
+            en.bind("<Return>", lambda ev: self._run())
+
+        self._a = tk.StringVar(value="-2"); self._b = tk.StringVar(value="1")
+        self._c = tk.StringVar(value="1");  self._d = tk.StringVar(value="-2")
+        mat_entry(0, 0, self._a, "a ="); mat_entry(0, 1, self._b, "b =")
+        mat_entry(1, 0, self._c, "c ="); mat_entry(1, 1, self._d, "d =")
+
+        tk.Frame(inp, bg=C["border"], width=1).pack(side="left", fill="y", padx=8, pady=6)
+
+        # ── Grupo 2: Forzado f(t) ─────────────────────────────────────
+        ft_frame = tk.Frame(inp, bg=C["panel"])
+        ft_frame.pack(side="left", padx=(0, 4), pady=(10, 10))
+        tk.Label(ft_frame, text="Forzado f(t)", bg=C["panel"], fg=C["accent4"],
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 2))
+        tk.Label(ft_frame, text="var: t  |  sin cos exp sqrt log abs pi e",
+                 bg=C["panel"], fg=C["text2"], font=("Segoe UI", 7)).pack(anchor="w")
+
+        def ft_row(parent, lbl, var, w=20):
+            frm = tk.Frame(parent, bg=C["panel"]); frm.pack(anchor="w", pady=4)
+            tk.Label(frm, text=lbl, bg=C["panel"], fg=C["text2"],
+                     font=("Consolas", 10, "bold"), width=9, anchor="e").pack(side="left", padx=(0, 4))
+            en = tk.Entry(frm, textvariable=var, width=w,
+                          bg=C["entry_bg"], fg=C["accent4"],
+                          insertbackground=C["text"], font=("Consolas", 11),
+                          relief="flat", bd=4)
+            en.pack(side="left", ipady=3)
+            en.bind("<Return>", lambda ev: self._run())
+
+        self._f1 = tk.StringVar(value="3")
+        self._f2 = tk.StringVar(value="2")
+        ft_row(ft_frame, "f₁(t) =", self._f1)
+        ft_row(ft_frame, "f₂(t) =", self._f2)
+
+        tk.Frame(inp, bg=C["border"], width=1).pack(side="left", fill="y", padx=8, pady=6)
+
+        # ── Grupo 3: CI + Rangos ──────────────────────────────────────
+        rng_outer = tk.Frame(inp, bg=C["panel"])
+        rng_outer.pack(side="left", padx=(0, 4), pady=(10, 10))
+
+        def field(p, lbl, var, w=7):
+            frm = tk.Frame(p, bg=C["panel"]); frm.pack(anchor="w", pady=1)
+            tk.Label(frm, text=lbl, bg=C["panel"], fg=C["text2"],
+                     font=("Segoe UI", 8), width=11, anchor="e").pack(side="left", padx=(0, 3))
+            en = tk.Entry(frm, textvariable=var, width=w,
+                          bg=C["entry_bg"], fg=C["accent2"],
+                          insertbackground=C["text"], font=("Consolas", 9),
+                          relief="flat", bd=4)
+            en.pack(side="left"); en.bind("<Return>", lambda ev: self._run())
+
+        ci_col = tk.Frame(rng_outer, bg=C["panel"]); ci_col.pack(side="left", padx=(0, 12))
+        tk.Label(ci_col, text="C. inicial", bg=C["panel"], fg=C["accent4"],
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 2))
+        self._x0   = tk.StringVar(value="1"); self._y0   = tk.StringVar(value="0")
+        self._tmax = tk.StringVar(value="10")
+        field(ci_col, "x₀ =", self._x0); field(ci_col, "y₀ =", self._y0)
+        field(ci_col, "t maximo:", self._tmax)
+
+        rg_col = tk.Frame(rng_outer, bg=C["panel"]); rg_col.pack(side="left")
+        tk.Label(rg_col, text="Rango graf.", bg=C["panel"], fg=C["accent4"],
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(0, 2))
+        self._xmin = tk.StringVar(value="-5"); self._xmax = tk.StringVar(value="5")
+        self._ymin = tk.StringVar(value="-5"); self._ymax = tk.StringVar(value="5")
+        field(rg_col, "x minimo:", self._xmin); field(rg_col, "x maximo:", self._xmax)
+        field(rg_col, "y minimo:", self._ymin); field(rg_col, "y maximo:", self._ymax)
+
+        # ── Boton + progressbar ───────────────────────────────────────
+        btn_frame = tk.Frame(inp, bg=C["panel"])
+        btn_frame.pack(side="left", padx=(10, 14), pady=10)
+        self._btn = tk.Button(btn_frame, text="  ANALIZAR  ",
+                               bg=C["accent4"], fg="white",
+                               font=("Segoe UI", 11, "bold"), relief="flat",
+                               cursor="hand2", pady=8,
+                               activebackground="#c2410c", activeforeground="white",
+                               command=self._run)
+        self._btn.pack(pady=(0, 8))
+        self._pb = ttk.Progressbar(btn_frame, mode="indeterminate", length=120,
+                                    style="NH.Horizontal.TProgressbar")
+
+        tk.Frame(self, bg=C["border"], height=1).pack(fill="x", padx=10)
+
+        # Panel principal
+        main = tk.Frame(self, bg=C["bg"])
+        main.pack(fill="both", expand=True, padx=10, pady=(4, 8))
+
+        # Sidebar resultados
+        sb = tk.Frame(main, bg=C["panel"], width=320)
+        sb.pack(side="left", fill="y", padx=(0, 6))
+        sb.pack_propagate(False)
+        tk.Label(sb, text="  RESULTADOS", bg=C["accent4"], fg="white",
+                 font=("Segoe UI", 9, "bold")).pack(fill="x", ipady=5)
+        self._rtxt = tk.Text(sb, bg=C["entry_bg"], fg=C["text"],
+                              font=("Consolas", 9), relief="flat",
+                              wrap="word", state="disabled",
+                              selectbackground=C["accent"], padx=8, pady=8)
+        self._rtxt.pack(fill="both", expand=True)
+
+        # Canvas matplotlib
+        pf = tk.Frame(main, bg=C["bg"])
+        pf.pack(side="left", fill="both", expand=True)
+        self._fig    = plt.Figure(facecolor=C["bg"])
+        self._canvas = FigureCanvasTkAgg(self._fig, master=pf)
+        self._canvas.get_tk_widget().pack(fill="both", expand=True)
+        tbf = tk.Frame(pf, bg=C["panel"]); tbf.pack(fill="x")
+        tb = NavigationToolbar2Tk(self._canvas, tbf)
+        tb.config(bg=C["panel"]); tb.update()
+        self._run()
+
+    def _run(self):
+        try:
+            a = float(self._a.get()); b = float(self._b.get())
+            c = float(self._c.get()); d = float(self._d.get())
+            f1_expr = self._f1.get().strip() or "0"
+            f2_expr = self._f2.get().strip() or "0"
+            tmax  = float(self._tmax.get())
+            x0_ic = float(self._x0.get()); y0_ic = float(self._y0.get())
+            xmin  = float(self._xmin.get()); xmax = float(self._xmax.get())
+            ymin  = float(self._ymin.get()); ymax = float(self._ymax.get())
+        except ValueError:
+            messagebox.showerror("Error", "Todos los valores deben ser numeros.", parent=self)
+            return
+        self._btn.config(state="disabled", text="  Analizando...")
+        self._pb.pack(pady=(0, 4)); self._pb.start(10)
+        # capturar expresiones para _finish
+        self._f1_snap = f1_expr; self._f2_snap = f2_expr
+
+        def _work():
+            try:
+                result = _analizar_nonhom(a, b, c, d, f1_expr, f2_expr,
+                                          tmax, x0_ic, y0_ic,
+                                          xmin, xmax, ymin, ymax, self._fig)
+                self.after(0, lambda: self._finish(result, None))
+            except Exception as exc:
+                self.after(0, lambda: self._finish(None, exc))
+        threading.Thread(target=_work, daemon=True).start()
+
+    def _finish(self, result, error):
+        self._pb.stop(); self._pb.pack_forget()
+        self._btn.config(state="normal", text="  ANALIZAR  ")
+        if error is not None:
+            messagebox.showerror("Error", "Error al analizar:\n\n{}".format(error), parent=self)
+            return
+        self._canvas.draw()
+        A, tau, delta, vals, vecs, tipo, estab, xp, f_tipo, f_const = result
+        lines = []
+        lines.append("SISTEMA: X' = AX + f(t)")
+        lines.append("=" * 32)
+        lines.append("")
+        lines.append("PARTE HOMOGENEA")
+        lines.append("-" * 32)
+        lines.append("  Tipo:        {}".format(tipo))
+        lines.append("  Estabilidad: {}".format(estab))
+        lines.append("  Traza  τ    = {:+.6f}".format(tau))
+        lines.append("  Det    Δ    = {:+.6f}".format(delta))
+        lines.append("  τ² - 4Δ    = {:+.6f}".format(tau**2 - 4 * delta))
+        lines.append("")
+        lines.append("VALORES PROPIOS")
+        lines.append("-" * 32)
+        for i, v in enumerate(vals):
+            lines.append("  λ{} = {}".format(i + 1, _fmt_complex(v)))
+        lines.append("")
+        lines.append("FORZADO f(t)")
+        lines.append("-" * 32)
+        lines.append("  f1(t) = {}".format(self._f1_snap))
+        lines.append("  f2(t) = {}".format(self._f2_snap))
+        lines.append("  Tipo:  {}".format(f_tipo))
+        if f_const is not None:
+            lines.append("  Valor: ({:.4f}, {:.4f})".format(f_const[0], f_const[1]))
+        lines.append("")
+        lines.append("SOLUCION PARTICULAR")
+        lines.append("-" * 32)
+        if xp is not None:
+            lines.append("  A·xp = -f")
+            lines.append("  xp = ({:+.5f},".format(xp[0]))
+            lines.append("        {:+.5f})".format(xp[1]))
+            lines.append("")
+            lines.append("ANALISIS DINAMICO")
+            lines.append("-" * 32)
+            lines.append("  f constante => dinamica")
+            lines.append("  homogenea PRESERVADA,")
+            lines.append("  desplazada al eq. xp.")
+        else:
+            if f_tipo == "Constante":
+                lines.append("  A singular (det=0):")
+                lines.append("  no existe xp = -A^-1 f")
+                lines.append("  Verificar caso especial.")
+            else:
+                lines.append("  f(t) variable => xp no")
+                lines.append("  es constante.")
+            lines.append("")
+            lines.append("ANALISIS DINAMICO")
+            lines.append("-" * 32)
+            if f_tipo == "Variable en t":
+                lines.append("  f variable => dinamica")
+                lines.append("  homogenea puede")
+                lines.append("  MODIFICARSE o romperse.")
+        lines.append("")
+        lines.append("MATRIZ A")
+        lines.append("-" * 32)
+        lines.append("  [ {:+.4f}  {:+.4f} ]".format(A[0, 0], A[0, 1]))
+        lines.append("  [ {:+.4f}  {:+.4f} ]".format(A[1, 0], A[1, 1]))
+        txt = "\n".join(lines)
+        self._rtxt.config(state="normal")
+        self._rtxt.delete("1.0", "end")
+        self._rtxt.insert("end", txt)
+        self._rtxt.config(state="disabled")
+
+
+# =====================================================================
 #  MENU PRINCIPAL
 # =====================================================================
 
@@ -1232,6 +1628,23 @@ class MainMenu(tk.Tk):
                  text="dx/dt = ax+by, dy/dt = cx+dy   --   eigenvalores, clasificacion y diagramas",
                  bg=C["bg"], fg=C["text2"], font=("Segoe UI", 8, "italic")).pack()
 
+        tk.Frame(body, bg=C["bg"], height=18).pack()
+
+        # Boton 4: Sistemas No Homogeneos 2D
+        tk.Button(body,
+            text="   Sistemas No Homogeneos 2D",
+            bg=C["panel"], fg=C["text"],
+            font=("Segoe UI", 12, "bold"),
+            relief="flat", cursor="hand2",
+            padx=40, pady=22, width=36,
+            activebackground=C["accent4"], activeforeground="white",
+            command=self._open_nonhom,
+        ).pack(fill="x")
+        tk.Frame(body, bg=C["accent4"], height=3).pack(fill="x", pady=(0, 4))
+        tk.Label(body,
+                 text="X' = AX + f(t)   --   solucion particular, preservacion/ruptura de dinamica",
+                 bg=C["bg"], fg=C["text2"], font=("Segoe UI", 8, "italic")).pack()
+
         tk.Frame(body, bg=C["bg"], height=20).pack()
         tk.Label(body, text="*  *  *     Mas tipos de sistemas proximamente     *  *  *",
                  bg=C["bg"], fg="#2d3a55", font=("Segoe UI", 8)).pack(pady=6)
@@ -1247,6 +1660,9 @@ class MainMenu(tk.Tk):
 
     def _open_2d(self):
         win = SistemaLineal2DWindow(self); win.grab_set(); win.focus_force()
+
+    def _open_nonhom(self):
+        win = SistemaNoHomogeneo2DWindow(self); win.grab_set(); win.focus_force()
 
 # =====================================================================
 if __name__ == "__main__":
